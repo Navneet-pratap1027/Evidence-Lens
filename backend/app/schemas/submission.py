@@ -1,0 +1,51 @@
+from pydantic import BaseModel
+from typing import Optional
+
+
+# ==========================
+# Submission
+# ==========================
+
+class SubmissionResponse(BaseModel):
+    submission_id: str
+    message: str
+
+
+# ==========================
+# OCR
+# ==========================
+
+class OCRResponse(BaseModel):
+    submission_id: str
+    extracted_text: str
+
+
+# ==========================
+# Claim Extraction
+# ==========================
+
+class ClaimExtractionRequest(BaseModel):
+    submission_id: str
+    text: Optional[str] = None
+
+
+class ClaimExtractionResponse(BaseModel):
+    submission_id: str
+    claim: str
+
+
+# ==========================
+# Retrieval / RAG
+# ==========================
+
+class EvidenceItem(BaseModel):
+    text: str
+    source: str
+    reliability: float
+    similarity: float
+
+
+class RetrievalResponse(BaseModel):
+    submission_id: str
+    claim: str
+    evidence: list[EvidenceItem]
