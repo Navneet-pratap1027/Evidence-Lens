@@ -10,6 +10,9 @@ from app.schemas.submission import (
     ClaimExtractionRequest,
     ClaimExtractionResponse,
     RetrievalResponse,
+    VerdictRequest,
+    VerdictResponse,
+    StanceItem,
 )
 
 from app.services.submission_service import (
@@ -20,6 +23,7 @@ from app.services.submission_service import (
 from app.services.ocr_service import extract_text_from_image
 from app.services.claim_extraction_service import extract_claim
 from app.services.retrieval_service import retrieve_evidence
+from app.services.verdict_service import classify_stances
 
 
 # IMPORTANT:
@@ -105,11 +109,11 @@ def run_ocr(
 def claim_extraction(
     request: ClaimExtractionRequest,
 ):
-    claim = extract_claim(request.text)
+    result = extract_claim(request.text)
 
     return ClaimExtractionResponse(
         submission_id=request.submission_id,
-        claim=claim,
+        claim=result["claim"],
     )
 
 
@@ -128,4 +132,43 @@ def retrieve(
         submission_id=submission_id,
         claim=claim,
         evidence=evidence,
+    )
+
+
+# =====================================
+# Verdict
+# =====================================
+
+@router.post("/verdict", response_model=VerdictResponse)
+def generate_verdict(
+    request: VerdictRequest,
+):
+    evidence_dicts = [item.model_dump() for item in request.evidence]
+
+    stance_results = classify_stances(
+        claim=request.claim,
+        evidence=evidence_dicts,
+    )
+
+    evidence_with_stance = []
+
+    for original, stance in zip(evidence_dicts, stance_results):
+        evidence_with_stance.append(
+            StanceItem(
+                text=original["text"],
+                source=original["source"],
+                reliability=original["reliability"],
+                similarity=original["similarity"],
+                stance=stance["stance"],
+                stance_reasoning=stance["reasoning"],
+            )
+        )
+
+    return VerdictResponse(
+        submission_id=request.submission_id,
+        claim=request.claim,
+        verdict="Pending",
+        fusion_score=0.0,
+        evidence=evidence_with_stance,
+        explanation="Stance classification completed successfully.",
     )

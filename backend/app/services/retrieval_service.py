@@ -4,6 +4,9 @@ from sentence_transformers import SentenceTransformer
 _embedder = None
 _collection = None
 
+# Minimum similarity required to keep an evidence item
+SIMILARITY_THRESHOLD = 0.25
+
 
 def _get_embedder():
     global _embedder
@@ -20,24 +23,46 @@ def _get_collection():
     return _collection
 
 
-def retrieve_evidence(claim: str, top_k: int = 3) -> list[dict]:
+def retrieve_evidence(claim: str, top_k: int = 5) -> list[dict]:
     embedder = _get_embedder()
     collection = _get_collection()
 
-    query_embedding = embedder.encode(claim).tolist()
-    results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
+    query_embedding = embedder.encode(
+        claim,
+        normalize_embeddings=True,
+    ).tolist()
+
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+    )
 
     evidence = []
+
     for i in range(len(results["ids"][0])):
+
         distance = results["distances"][0][i]
-        similarity = 1 - distance  # cosine distance -> similarity
+        similarity = 1 - distance
+
+        # Remove irrelevant documents
+        if similarity < SIMILARITY_THRESHOLD:
+            continue
+
         metadata = results["metadatas"][0][i]
 
-        evidence.append({
-            "text": results["documents"][0][i],
-            "source": metadata.get("source", "unknown"),
-            "reliability": metadata.get("reliability", 0.5),
-            "similarity": round(similarity, 3),
-        })
+        evidence.append(
+            {
+                "text": results["documents"][0][i],
+                "source": metadata.get("source", "Unknown"),
+                "reliability": metadata.get("reliability", 0.5),
+                "similarity": round(similarity, 3),
+            }
+        )
+
+    # Highest similarity first
+    evidence.sort(
+        key=lambda item: item["similarity"],
+        reverse=True,
+    )
 
     return evidence

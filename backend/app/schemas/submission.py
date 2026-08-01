@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel
 
 
 # ==========================
@@ -49,3 +50,35 @@ class RetrievalResponse(BaseModel):
     submission_id: str
     claim: str
     evidence: list[EvidenceItem]
+
+
+# ==========================
+# Stance Classification
+# ==========================
+
+class StanceItem(BaseModel):
+    text: str
+    source: str
+    reliability: float
+    similarity: float
+    stance: str
+    stance_reasoning: str
+
+
+# ==========================
+# Verdict
+# ==========================
+
+class VerdictRequest(BaseModel):
+    submission_id: str
+    claim: str
+    evidence: list[EvidenceItem]
+
+
+class VerdictResponse(BaseModel):
+    submission_id: str
+    claim: str
+    verdict: str
+    fusion_score: float
+    evidence: list[StanceItem]
+    explanation: str
