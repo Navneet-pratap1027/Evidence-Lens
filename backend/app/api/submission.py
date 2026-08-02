@@ -23,12 +23,8 @@ from app.services.submission_service import (
 from app.services.ocr_service import extract_text_from_image
 from app.services.claim_extraction_service import extract_claim
 from app.services.retrieval_service import retrieve_evidence
-from app.services.verdict_service import classify_stances
+from app.services.verdict_service import generate_verdict
 
-
-# IMPORTANT:
-# Prefix yahan mat do.
-# Prefix main.py me diya jayega.
 router = APIRouter(tags=["Submission"])
 
 
@@ -93,7 +89,9 @@ def run_ocr(
             detail="This submission has no image."
         )
 
-    extracted_text = extract_text_from_image(submission.file_path)
+    extracted_text = extract_text_from_image(
+        submission.file_path
+    )
 
     return OCRResponse(
         submission_id=submission_id,
@@ -136,39 +134,31 @@ def retrieve(
 
 
 # =====================================
-# Verdict
+# Final Verdict
 # =====================================
 
 @router.post("/verdict", response_model=VerdictResponse)
-def generate_verdict(
+def get_verdict(
     request: VerdictRequest,
 ):
-    evidence_dicts = [item.model_dump() for item in request.evidence]
+    evidence_dicts = [
+        item.model_dump()
+        for item in request.evidence
+    ]
 
-    stance_results = classify_stances(
+    result = generate_verdict(
         claim=request.claim,
         evidence=evidence_dicts,
     )
 
-    evidence_with_stance = []
-
-    for original, stance in zip(evidence_dicts, stance_results):
-        evidence_with_stance.append(
-            StanceItem(
-                text=original["text"],
-                source=original["source"],
-                reliability=original["reliability"],
-                similarity=original["similarity"],
-                stance=stance["stance"],
-                stance_reasoning=stance["reasoning"],
-            )
-        )
-
     return VerdictResponse(
         submission_id=request.submission_id,
         claim=request.claim,
-        verdict="Pending",
-        fusion_score=0.0,
-        evidence=evidence_with_stance,
-        explanation="Stance classification completed successfully.",
+        verdict=result["verdict"],
+        fusion_score=result["fusion_score"],
+        evidence=[
+            StanceItem(**item)
+            for item in result["evidence"]
+        ],
+        explanation=result["explanation"],
     )

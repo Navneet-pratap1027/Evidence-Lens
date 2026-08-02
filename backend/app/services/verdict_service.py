@@ -1,127 +1,172 @@
-import json
-import os
-
-from dotenv import load_dotenv
-from fastapi import HTTPException
-from google import genai
-
-load_dotenv()
-
-api_key = os.getenv("LLM_API_KEY")
-
-if not api_key:
-    raise RuntimeError("LLM_API_KEY not found in .env")
-
-client = genai.Client(api_key=api_key)
+from app.services.stance_service import classify_stances
 
 
-STANCE_PROMPT = """
-You are a stance classification assistant for a misinformation verification system.
-
-You will receive:
-1. One factual claim.
-2. A list of evidence items.
-
-For EACH evidence item classify whether it:
-
-- supports
-- contradicts
-- neutral
-
-Rules:
-- Return exactly one result for every evidence item.
-- Keep the same order.
-- Do NOT judge the overall truth of the claim.
-- Only determine the relationship between the claim and the evidence.
-- Return ONLY valid JSON.
-
-Claim:
-{claim}
-
-Evidence:
-{evidence}
-
-Return JSON in this format:
-
-[
-  {{
-    "stance": "supports",
-    "reasoning": "short explanation"
-  }}
-]
-"""
+STANCE_SCORE = {
+    "supports": 1.0,
+    "contradicts": -1.0,
+    "neutral": 0.0,
+}
 
 
-def classify_stances(claim: str, evidence: list[dict]) -> list:
-    if not claim.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Claim cannot be empty",
+def compute_fusion_score(evidence: list[dict]) -> float:
+    """
+    Weighted fusion score using
+    similarity × reliability × stance.
+    """
+
+    weighted_sum = 0.0
+    total_weight = 0.0
+
+    for item in evidence:
+
+        weight = (
+            item["similarity"]
+            * item["reliability"]
         )
+
+        stance_value = STANCE_SCORE.get(
+            item["stance"],
+            0.0,
+        )
+
+        weighted_sum += weight * stance_value
+        total_weight += weight
+
+    if total_weight == 0:
+        return 0.0
+
+    return round(weighted_sum / total_weight, 3)
+
+
+def map_verdict(
+    fusion_score: float,
+    evidence: list[dict],
+) -> str:
+    """
+    Convert fusion score into
+    final human-readable verdict.
+    """
 
     if not evidence:
-        raise HTTPException(
-            status_code=400,
-            detail="No evidence provided",
-        )
+        return "Insufficient Evidence"
 
-    evidence_text = ""
+    supports = sum(
+        1
+        for e in evidence
+        if e["stance"] == "supports"
+    )
 
-    for index, item in enumerate(evidence, start=1):
-        evidence_text += (
-            f"{index}. "
-            f"Source: {item.get('source', 'Unknown')}\n"
-            f"Text: {item.get('text', '')}\n\n"
-        )
+    contradicts = sum(
+        1
+        for e in evidence
+        if e["stance"] == "contradicts"
+    )
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=STANCE_PROMPT.format(
-                claim=claim,
-                evidence=evidence_text,
-            ),
-            config={
-                "response_mime_type": "application/json"
-            },
-        )
+    if supports > 0 and contradicts > 0:
+        return "Conflicting Evidence"
 
-        raw_text = response.text.strip()
+    if fusion_score >= 0.70:
+        return "Verified"
 
-        # Remove Markdown code fences if Gemini still returns them
-        if raw_text.startswith("```"):
-            raw_text = raw_text.replace("```json", "")
-            raw_text = raw_text.replace("```", "")
-            raw_text = raw_text.strip()
+    if fusion_score >= 0.35:
+        return "Likely Verified"
 
-        print("\n========== STANCE RESPONSE ==========")
-        print(raw_text)
-        print("=====================================\n")
+    if fusion_score <= -0.70:
+        return "Misleading"
 
-        parsed = json.loads(raw_text)
+    if fusion_score <= -0.35:
+        return "Likely Misleading"
 
-        if not isinstance(parsed, list):
-            raise HTTPException(
-                status_code=500,
-                detail="Gemini did not return a JSON array.",
+    return "Needs Verification"
+
+
+def generate_explanation(
+    claim: str,
+    verdict: str,
+    evidence: list[dict],
+) -> str:
+
+    explanation = []
+
+    explanation.append(
+        f'Claim: "{claim}"'
+    )
+
+    explanation.append(
+        f"Verdict: {verdict}"
+    )
+
+    explanation.append("Evidence Summary:")
+
+    for item in evidence:
+
+        explanation.append(
+            (
+                f"- [{item['stance'].upper()}] "
+                f"{item['source']} "
+                f"(Similarity={item['similarity']})"
             )
-
-        if len(parsed) != len(evidence):
-            raise HTTPException(
-                status_code=500,
-                detail="Number of stance results does not match evidence count.",
-            )
-
-        return parsed
-
-    except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Invalid JSON returned by Gemini:\n{raw_text}",
         )
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Gemini API error: {str(e)}",
+    return "\n".join(explanation)
+
+
+def generate_verdict(
+    claim: str,
+    evidence: list[dict],
+) -> dict:
+    """
+    Complete verdict pipeline.
+
+    Claim
+        ↓
+    Stance Classification
+        ↓
+    Fusion Score
+        ↓
+    Verdict
+        ↓
+    Explainable Report
+    """
+
+    stance_results = classify_stances(
+        claim,
+        evidence,
+    )
+
+    enriched = []
+
+    for item, stance in zip(
+        evidence,
+        stance_results,
+    ):
+
+        enriched.append(
+            {
+                **item,
+                "stance": stance["stance"],
+                "stance_reasoning": stance["reasoning"],
+            }
         )
+
+    fusion_score = compute_fusion_score(
+        enriched,
+    )
+
+    verdict = map_verdict(
+        fusion_score,
+        enriched,
+    )
+
+    explanation = generate_explanation(
+        claim,
+        verdict,
+        enriched,
+    )
+
+    return {
+        "verdict": verdict,
+        "fusion_score": fusion_score,
+        "evidence": enriched,
+        "explanation": explanation,
+    }

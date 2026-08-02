@@ -42,6 +42,7 @@ class ClaimExtractionResponse(BaseModel):
 class EvidenceItem(BaseModel):
     text: str
     source: str
+    url: str
     reliability: float
     similarity: float
 
@@ -59,6 +60,7 @@ class RetrievalResponse(BaseModel):
 class StanceItem(BaseModel):
     text: str
     source: str
+    url: str
     reliability: float
     similarity: float
     stance: str

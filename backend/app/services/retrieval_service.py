@@ -1,67 +1,69 @@
-import chromadb
-from sentence_transformers import SentenceTransformer
-
-_embedder = None
-_collection = None
-
-# Minimum similarity required to keep an evidence item
-SIMILARITY_THRESHOLD = 0.25
+from app.services.search_service import search_trusted_sources
+from app.services.crawler_service import extract_article
+from app.services.rag_service import chunk_text, rank_chunks
 
 
-def _get_embedder():
-    global _embedder
-    if _embedder is None:
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedder
+def retrieve_evidence(
+    claim: str,
+    top_k: int = 5,
+) -> list[dict]:
+    """
+    Dynamic Retrieval Pipeline
 
+    Claim
+        ↓
+    Tavily Search
+        ↓
+    Crawl Articles
+        ↓
+    Chunk
+        ↓
+    Rank
+        ↓
+    Return Best Evidence
+    """
 
-def _get_collection():
-    global _collection
-    if _collection is None:
-        client = chromadb.PersistentClient(path="knowledge_base/chroma_db")
-        _collection = client.get_or_create_collection("trusted_sources")
-    return _collection
-
-
-def retrieve_evidence(claim: str, top_k: int = 5) -> list[dict]:
-    embedder = _get_embedder()
-    collection = _get_collection()
-
-    query_embedding = embedder.encode(
+    search_results = search_trusted_sources(
         claim,
-        normalize_embeddings=True,
-    ).tolist()
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
+        max_results=top_k,
     )
 
     evidence = []
 
-    for i in range(len(results["ids"][0])):
+    for result in search_results:
 
-        distance = results["distances"][0][i]
-        similarity = 1 - distance
+        try:
 
-        # Remove irrelevant documents
-        if similarity < SIMILARITY_THRESHOLD:
+            article = extract_article(result["url"])
+
+            chunks = chunk_text(article)
+
+            ranked_chunks = rank_chunks(
+                claim,
+                chunks,
+                top_k=1,
+            )
+
+            if not ranked_chunks:
+                continue
+
+            best = ranked_chunks[0]
+
+            evidence.append(
+                {
+                    "text": best["text"],
+                    "source": result["title"],
+                    "url": result["url"],
+                    "reliability": 1.0,
+                    "similarity": best["similarity"],
+                }
+            )
+
+        except Exception:
             continue
 
-        metadata = results["metadatas"][0][i]
-
-        evidence.append(
-            {
-                "text": results["documents"][0][i],
-                "source": metadata.get("source", "Unknown"),
-                "reliability": metadata.get("reliability", 0.5),
-                "similarity": round(similarity, 3),
-            }
-        )
-
-    # Highest similarity first
     evidence.sort(
-        key=lambda item: item["similarity"],
+        key=lambda x: x["similarity"],
         reverse=True,
     )
 
